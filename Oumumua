@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>1I/'Oumuamua — NASA Style</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;overflow:hidden;width:100vw;height:100vh;font-family:'Helvetica Neue',Arial,sans-serif}
+#c{display:block;width:100vw;height:100vh}
+
+/* HUD — minimal, in-scene style */
+#hud{
+  position:absolute;inset:0;pointer-events:none;
+}
+
+/* Bottom controls — only interactive element */
+#controls{
+  position:absolute;bottom:0;left:0;right:0;
+  pointer-events:all;
+  padding:14px 24px 18px;
+  background:linear-gradient(transparent,rgba(0,0,0,.7));
+  display:flex;align-items:center;gap:16px;
+}
+#btn-play{
+  background:none;border:1px solid rgba(255,255,255,.4);color:#fff;
+  width:32px;height:32px;cursor:pointer;font-size:12px;
+  border-radius:2px;display:flex;align-items:center;justify-content:center;
+  transition:border-color .2s;flex-shrink:0;
+}
+#btn-play:hover{border-color:#fff}
+#btn-restart{
+  background:none;border:none;color:rgba(255,255,255,.4);
+  font-size:16px;cursor:pointer;line-height:1;padding:0 4px;
+  transition:color .2s;
+}
+#btn-restart:hover{color:#fff}
+#tl{
+  flex:1;height:2px;-webkit-appearance:none;appearance:none;
+  background:rgba(255,255,255,.15);outline:none;cursor:pointer;
+}
+#tl::-webkit-slider-thumb{
+  -webkit-appearance:none;width:10px;height:10px;
+  border-radius:50%;background:#fff;cursor:pointer;
+}
+.speed-btn{
+  background:none;border:1px solid rgba(255,255,255,.2);
+  color:rgba(255,255,255,.5);font-size:10px;padding:3px 7px;
+  cursor:pointer;border-radius:2px;font-family:inherit;
+  transition:all .15s;letter-spacing:.04em;
+}
+.speed-btn:hover,.speed-btn.on{color:#fff;border-color:rgba(255,255,255,.6)}
+#date-label{
+  font-size:11px;color:rgba(255,255,255,.5);
+  letter-spacing:.06em;min-width:90px;text-align:right;
+}
+
+/* Top left — mission info */
+#info-tl{
+  position:absolute;top:20px;left:24px;
+  font-size:11px;color:rgba(255,255,255,.45);
+  letter-spacing:.06em;line-height:1.7;
+}
+#info-tl strong{color:rgba(255,255,255,.85);font-size:13px;letter-spacing:.04em;font-weight:500}
+
+/* Top right — live data */
+#info-tr{
+  position:absolute;top:20px;right:24px;text-align:right;
+  font-size:11px;color:rgba(255,255,255,.45);letter-spacing:.06em;line-height:2;
+}
+#info-tr span{color:rgba(255,255,255,.8)}
+
+/* Camera buttons */
+#cam-btns{
+  position:absolute;right:24px;bottom:64px;
+  display:flex;flex-direction:column;gap:4px;pointer-events:all;
+}
+.cam-btn{
+  background:none;border:1px solid rgba(255,255,255,.2);
+  color:rgba(255,255,255,.4);font-size:10px;padding:4px 10px;
+  cursor:pointer;letter-spacing:.06em;border-radius:2px;
+  font-family:inherit;transition:all .15s;text-align:right;
+}
+.cam-btn:hover,.cam-btn.on{color:#fff;border-color:rgba(255,255,255,.5);background:rgba(255,255,255,.04)}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+  <div id="info-tl">
+    <strong>1I / 'OUMUAMUA</strong><br>
+    Primer objeto interestelar confirmado<br>
+    Descubierto: 19 oct 2017 · R. Weryk, Pan-STARRS<br>
+    e = 1.2011 &nbsp;|&nbsp; q = 0.256 AU &nbsp;|&nbsp; i = 122.7°
+  </div>
+  <div id="info-tr">
+    Velocidad<br><span id="rt-v">—</span> km/s<br>
+    Dist. Sol<br><span id="rt-r">—</span> AU<br>
+    Dist. Tierra<br><span id="rt-e">—</span> AU
+  </div>
+  <div id="cam-btns">
+    <button class="cam-btn on" id="cb-oblique" onclick="setCam('oblique')">OBLICUA</button>
+    <button class="cam-btn" id="cb-top" onclick="setCam('top')">TOP</button>
+    <button class="cam-btn" id="cb-side" onclick="setCam('side')">LATERAL</button>
+    <button class="cam-btn" id="cb-follow" onclick="setCam('follow')">SEGUIR</button>
+  </div>
+</div>
+<div id="controls">
+  <button id="btn-play" onclick="togglePlay()">⏸</button>
+  <button id="btn-restart" onclick="restart()" title="Reiniciar">↺</button>
+  <input type="range" id="tl" min="0" max="1000" value="0">
+  <div style="display:flex;gap:4px">
+    <button class="speed-btn on" onclick="setSpd(1,this)">1×</button>
+    <button class="speed-btn" onclick="setSpd(2,this)">2×</button>
+    <button class="speed-btn" onclick="setSpd(4,this)">4×</button>
+    <button class="speed-btn" onclick="setSpd(8,this)">8×</button>
+  </div>
+  <div id="date-label">—</div>
+</div>
+
+<script>
+const PI=Math.PI,cos=Math.cos,sin=Math.sin,sqrt=Math.sqrt,abs=Math.abs;
+
+// ── Orbital mechanics ──────────────────────────────────────────────────────
+function rotZ(a){const c=cos(a),s=sin(a);return[[c,-s,0],[s,c,0],[0,0,1]]}
+function rotX(a){const c=cos(a),s=sin(a);return[[1,0,0],[0,c,-s],[0,s,c]]}
+function mm(A,B){
+  const C=[[0,0,0],[0,0,0],[0,0,0]];
+  for(let i=0;i<3;i++)for(let j=0;j<3;j++)for(let k=0;k<3;k++)C[i][j]+=A[i][k]*B[k][j];
+  return C;
+}
+function mv(M,v){return[M[0][0]*v[0]+M[0][1]*v[1]+M[0][2]*v[2],M[1][0]*v[0]+M[1][1]*v[1]+M[1][2]*v[2],M[2][0]*v[0]+M[2][1]*v[1]+M[2][2]*v[2]]}
+function orbitMat(node,inc,peri){return mm(rotZ(node),mm(rotX(inc),rotZ(peri)))}
+
+function orbitPoint(f,e,a,M){
+  const p=e<1?abs(a)*(1-e*e):abs(a)*(e*e-1);
+  const r=p/(1+e*cos(f));
+  const v=mv(M,[r*cos(f),r*sin(f),0]);
+  return{x:v[0],y:v[1],z:v[2],r};
+}
+
+function buildOrbit(e,a,node,inc,peri,n){
+  const M=orbitMat(node,inc,peri);
+  const pts=[];
+  let fs;
+  if(e<1){fs=Array.from({length:n},(_,k)=>2*PI*k/(n-1));}
+  else{const fl=Math.acos(-1/e)-.002;fs=Array.from({length:n},(_,k)=>-fl+2*fl*k/(n-1));}
+  for(const f of fs){const p=orbitPoint(f,e,a,M);pts.push(p.x,p.y,p.z);}
+  return new Float32Array(pts);
+}
+
+const MU=39.4784; // AU³/yr²
+function vel_kms(f,e,a){
+  const r=abs(a)*(e*e-1)/(1+e*cos(f));
+  return sqrt(MU*(2/r+1/abs(a)))*4.7404;
+}
+
+// ── Bodies ─────────────────────────────────────────────────────────────────
+const OU={e:1.201133796,a:-1.27234501,i:122.7417063*PI/180,node:24.5969096*PI/180,peri:241.8105360*PI/180};
+const planets=[
+  {name:'Mercury', e:.2056,a:.387,i:7.00*PI/180,   node:48.33*PI/180, peri:77.45*PI/180,  color:0xaaaaaa,r:.004},
+  {name:'Venus',   e:.0068,a:.723,i:3.39*PI/180,   node:76.68*PI/180, peri:131.53*PI/180, color:0xe8c97a,r:.006},
+  {name:'Earth',   e:.0167,a:1.000,i:.0001*PI/180,  node:-11.26*PI/180,peri:102.95*PI/180, color:0x5b9bd5,r:.006},
+  {name:'Mars',    e:.0934,a:1.524,i:1.850*PI/180,  node:49.56*PI/180, peri:336.04*PI/180, color:0xc1603a,r:.005},
+  {name:'Jupiter', e:.0489,a:5.203,i:1.305*PI/180,  node:100.47*PI/180,peri:14.73*PI/180,  color:0xc8a97a,r:.009},
+];
+
+// ── THREE setup ────────────────────────────────────────────────────────────
+const canvas=document.getElementById('c');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setClearColor(0x000000,1);
+
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(40,innerWidth/innerHeight,.001,500);
+
+function resize(){
+  renderer.setSize(innerWidth,innerHeight);
+  camera.aspect=innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+}
+resize();
+window.addEventListener('resize',resize);
+
+// ── Stars ──────────────────────────────────────────────────────────────────
+(()=>{
+  const n=3500,pos=new Float32Array(n*3),siz=new Float32Array(n);
+  for(let i=0;i<n;i++){
+    const th=Math.random()*2*PI,ph=Math.acos(2*Math.random()-1);
+    const d=200+Math.random()*100;
+    pos[i*3]=d*sin(ph)*cos(th);
+    pos[i*3+1]=d*sin(ph)*sin(th);
+    pos[i*3+2]=d*cos(ph);
+    siz[i]=Math.random()<.02?.6:.18+Math.random()*.25;
+  }
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  g.setAttribute('size',new THREE.BufferAttribute(siz,1));
+  const mat=new THREE.PointsMaterial({color:0xffffff,size:.25,transparent:true,opacity:.75,sizeAttenuation:false});
+  scene.add(new THREE.Points(g,mat));
+})();
+
+// ── Planet orbits ──────────────────────────────────────────────────────────
+const orbitMeshes={};
+for(const pl of planets){
+  const pts=buildOrbit(pl.e,pl.a,pl.node,pl.i,pl.peri,300);
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.BufferAttribute(pts,3));
+  const line=new THREE.Line(g,new THREE.LineBasicMaterial({color:pl.color,transparent:true,opacity:.45}));
+  scene.add(line);
+  orbitMeshes[pl.name]=line;
+}
+
+// ── 'Oumuamua orbit — progressive draw ───────────────────────────────────
+const M_ou=orbitMat(OU.node,OU.i,OU.peri);
+const F_START=-2.52, F_END=2.52;
+const OU_N=700;
+
+// Pre-compute all orbit points in order (f from F_START to F_END)
+const ouAllPts=[];
+for(let k=0;k<OU_N;k++){
+  const f=F_START+(F_END-F_START)*k/(OU_N-1);
+  const p=orbitPoint(f,OU.e,OU.a,M_ou);
+  ouAllPts.push(p.x,p.y,p.z);
+}
+const ouPts=new Float32Array(ouAllPts);
+
+// Drawn orbit: starts empty, grows as object moves
+const ouGeo=new THREE.BufferGeometry();
+ouGeo.setAttribute('position',new THREE.BufferAttribute(ouPts,3));
+ouGeo.setDrawRange(0,0); // start empty
+const ouLine=new THREE.Line(ouGeo,new THREE.LineBasicMaterial({color:0xffffff,transparent:true,opacity:.85}));
+scene.add(ouLine);
+
+// Ghost orbit: full path shown very faintly as preview
+const ghostGeo=new THREE.BufferGeometry();
+ghostGeo.setAttribute('position',new THREE.BufferAttribute(ouPts.slice(),3));
+const ghostLine=new THREE.Line(ghostGeo,new THREE.LineBasicMaterial({color:0xffffff,transparent:true,opacity:.08}));
+scene.add(ghostLine);
+
+// ── Planet dots + labels ───────────────────────────────────────────────────
+// We approximate planet positions at perihelion epoch (2017-09-09)
+// Mean longitudes at J2000 + mean motion
+const J2000_days=(new Date('2017-09-09')-new Date('2000-01-01T12:00:00Z'))/86400000;
+function planetPos(pl){
+  // Simplified: use mean longitude propagation
+  const n_deg=0.9856076/pl.a**(1.5); // deg/day approximate
+  const L0={Mercury:252.25,Venus:181.98,Earth:100.46,Mars:355.43,Jupiter:34.40};
+  const L=(L0[pl.name]+n_deg*J2000_days)*PI/180;
+  // Simple circular approximation for visualization
+  return new THREE.Vector3(pl.a*cos(L),0,pl.a*sin(L));
+}
+
+const planetDots={};
+const labelDivs={};
+for(const pl of planets){
+  const sg=new THREE.SphereGeometry(pl.r,8,8);
+  const sm=new THREE.MeshBasicMaterial({color:pl.color});
+  const mesh=new THREE.Mesh(sg,sm);
+  const p=planetPos(pl);
+  mesh.position.copy(p);
+  scene.add(mesh);
+  planetDots[pl.name]=mesh;
+
+  // HTML label
+  const div=document.createElement('div');
+  div.textContent=pl.name;
+  div.style.cssText=`position:absolute;font-size:11px;color:rgba(${pl.name==='Earth'?'91,155,213':'200,169,122'},0.85);pointer-events:none;letter-spacing:.04em;white-space:nowrap;`;
+  if(pl.name==='Mercury') div.style.color='rgba(170,170,170,.75)';
+  if(pl.name==='Mars') div.style.color='rgba(193,96,58,.85)';
+  if(pl.name==='Venus') div.style.color='rgba(232,201,122,.85)';
+  document.getElementById('hud').appendChild(div);
+  labelDivs[pl.name]=div;
+}
+
+// Sun
+const sunG=new THREE.SphereGeometry(.025,16,16);
+const sunM=new THREE.MeshBasicMaterial({color:0xfff5b0});
+const sunMesh=new THREE.Mesh(sunG,sunM);
+scene.add(sunMesh);
+// Sun label
+const sunLabel=document.createElement('div');
+sunLabel.textContent='Sun';
+sunLabel.style.cssText='position:absolute;font-size:11px;color:rgba(255,245,180,.85);pointer-events:none;letter-spacing:.04em;';
+document.getElementById('hud').appendChild(sunLabel);
+labelDivs['Sun']=sunLabel;
+
+// ── 'Oumuamua marker ──────────────────────────────────────────────────────
+const ouDotG=new THREE.SphereGeometry(.008,8,8);
+const ouDotM=new THREE.MeshBasicMaterial({color:0xffffff});
+const ouDot=new THREE.Mesh(ouDotG,ouDotM);
+scene.add(ouDot);
+
+// Oumuamua label
+const ouLabel=document.createElement('div');
+ouLabel.textContent="2017 U1";
+ouLabel.style.cssText='position:absolute;font-size:11px;color:rgba(255,255,255,.85);pointer-events:none;letter-spacing:.04em;';
+document.getElementById('hud').appendChild(ouLabel);
+
+// progressive orbit draw — no separate trail buffer needed
+
+// ── Camera ────────────────────────────────────────────────────────────────
+let theta=-.6, phi=1.1, radius=12;
+const target=new THREE.Vector3(.3,0,0);
+let camMode='oblique';
+
+const camPresets={
+  oblique:{theta:-.5,phi:1.15,radius:12},
+  top:{theta:PI/2,phi:.01,radius:10},
+  side:{theta:0,phi:PI/2,radius:10},
+};
+
+function setCam(mode){
+  camMode=mode;
+  document.querySelectorAll('.cam-btn').forEach(b=>b.classList.remove('on'));
+  document.getElementById('cb-'+mode)?.classList.add('on');
+  if(mode!=='follow'&&camPresets[mode]){
+    const p=camPresets[mode];theta=p.theta;phi=p.phi;radius=p.radius;
+  }
+}
+
+function applyCamera(){
+  if(camMode==='follow'){
+    const t=new THREE.Vector3(ouDot.position.x,ouDot.position.y,ouDot.position.z);
+    camera.position.lerp(t.clone().add(new THREE.Vector3(.5,.3,.5)),0.06);
+    camera.lookAt(ouDot.position);
+    return;
+  }
+  camera.position.set(
+    target.x+radius*sin(phi)*cos(theta),
+    target.y+radius*cos(phi),
+    target.z+radius*sin(phi)*sin(theta)
+  );
+  camera.lookAt(target);
+}
+
+// Mouse drag
+let drag=false,mx=0,my=0;
+canvas.addEventListener('mousedown',e=>{drag=true;mx=e.clientX;my=e.clientY});
+window.addEventListener('mouseup',()=>drag=false);
+window.addEventListener('mousemove',e=>{
+  if(!drag||camMode==='follow') return;
+  theta-=(e.clientX-mx)*.006;
+  phi=Math.max(.02,Math.min(PI-.02,phi-(e.clientY-my)*.006));
+  mx=e.clientX;my=e.clientY;
+});
+canvas.addEventListener('wheel',e=>{
+  radius=Math.max(.5,Math.min(40,radius+e.deltaY*.012));
+  e.preventDefault();
+},{passive:false});
+
+let touchLast=null;
+canvas.addEventListener('touchstart',e=>{touchLast={x:e.touches[0].clientX,y:e.touches[0].clientY}});
+canvas.addEventListener('touchmove',e=>{
+  if(!touchLast||camMode==='follow') return;
+  theta-=(e.touches[0].clientX-touchLast.x)*.006;
+  phi=Math.max(.02,Math.min(PI-.02,phi-(e.touches[0].clientY-touchLast.y)*.006));
+  touchLast={x:e.touches[0].clientX,y:e.touches[0].clientY};
+  e.preventDefault();
+},{passive:false});
+
+// ── Projection helper (world → screen) ───────────────────────────────────
+function project(pos3d){
+  const v=pos3d.clone().project(camera);
+  return{
+    x:(v.x*.5+.5)*innerWidth,
+    y:(-.5*v.y+.5)*innerHeight,
+    behind:v.z>1
+  };
+}
+
+// ── Animation state ───────────────────────────────────────────────────────
+let frame=0,playing=true,speed=1;
+const FRAMES=2000;
+const SIM_START=new Date('2017-01-01');
+const SIM_END  =new Date('2018-12-31');
+
+function frameToDate(f){
+  return new Date(SIM_START.getTime()+(SIM_END.getTime()-SIM_START.getTime())*f/FRAMES);
+}
+function fmtDate(d){return d.toLocaleDateString('es-MX',{month:'short',day:'numeric',year:'numeric'})}
+
+const tl=document.getElementById('tl');
+tl.addEventListener('input',()=>{frame=+tl.value;playing=false;document.getElementById('btn-play').textContent='▶'});
+
+function togglePlay(){playing=!playing;document.getElementById('btn-play').textContent=playing?'⏸':'▶'}
+function restart(){frame=0;tl.value=0;playing=true;document.getElementById('btn-play').textContent='⏸';ouGeo.setDrawRange(0,0)}
+function setSpd(s,btn){speed=s;document.querySelectorAll('.speed-btn').forEach(b=>b.classList.remove('on'));btn.classList.add('on')}
+
+// Earth simplified position at date
+function earthPosSim(date){
+  const days=(date-new Date('2000-01-01T12:00:00Z'))/86400000;
+  const L=(100.46+0.9856474*days)*PI/180;
+  const g=(357.528+0.9856003*days)*PI/180;
+  const lam=L+1.915*PI/180*sin(g)+.020*PI/180*sin(2*g);
+  const r=1.00014-.01671*cos(g)-.00014*cos(2*g);
+  return new THREE.Vector3(r*cos(lam),0,r*sin(lam));
+}
+
+// ── Render loop ───────────────────────────────────────────────────────────
+let last=null;
+function loop(ts){
+  requestAnimationFrame(loop);
+  if(last===null) last=ts;
+  const dt=ts-last; last=ts;
+
+  if(playing){
+    frame+=speed*(dt/16.67);
+    if(frame>FRAMES) frame=0;
+    tl.value=Math.round(frame);
+  }
+
+  const t=frame/FRAMES;
+  // Non-linear: slow near perihelion (t=0.5), faster at extremes
+  // Use a simple ease: stretch t around center using cubic
+  const tc = t * 2 - 1; // -1 to 1
+  const tMapped = (tc * (Math.abs(tc) * 0.45 + 0.55) + 1) / 2; // 0 to 1, slowed at center
+  const f=F_START+(F_END-F_START)*tMapped;
+  const pos=orbitPoint(f,OU.e,OU.a,M_ou);
+
+  ouDot.position.set(pos.x,pos.y,pos.z);
+
+  // Progressive orbit: reveal points up to current frame
+  const drawnPts=Math.round(tMapped*OU_N);
+  ouGeo.setDrawRange(0,Math.max(2,drawnPts));
+
+  // Camera
+  applyCamera();
+
+  // Labels
+  const ouScr=project(ouDot.position);
+  if(!ouScr.behind){
+    ouLabel.style.left=(ouScr.x+8)+'px';
+    ouLabel.style.top=(ouScr.y-6)+'px';
+    ouLabel.style.display='block';
+  } else ouLabel.style.display='none';
+
+  const sunScr=project(new THREE.Vector3(0,0,0));
+  if(!sunScr.behind){
+    sunLabel.style.left=(sunScr.x+7)+'px';
+    sunLabel.style.top=(sunScr.y-5)+'px';
+  }
+
+  for(const pl of planets){
+    const scr=project(planetDots[pl.name].position);
+    const div=labelDivs[pl.name];
+    if(!scr.behind){
+      div.style.left=(scr.x+6)+'px';
+      div.style.top=(scr.y-5)+'px';
+      div.style.display='block';
+    } else div.style.display='none';
+  }
+
+  // HUD data
+  const v=vel_kms(f,OU.e,OU.a);
+  const date=frameToDate(frame);
+  const ep=earthPosSim(date);
+  const de=ep.distanceTo(ouDot.position);
+
+  document.getElementById('rt-v').textContent=v.toFixed(1);
+  document.getElementById('rt-r').textContent=pos.r.toFixed(3);
+  document.getElementById('rt-e').textContent=de.toFixed(3);
+  document.getElementById('date-label').textContent=fmtDate(date);
+
+  renderer.render(scene,camera);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
